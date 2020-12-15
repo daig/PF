@@ -94,7 +94,7 @@ module lenses {a b : Set} (f : a → b) where
   emitter : Emitter a ↝ Emitter b
   emitter = f ⇵ λ _ (.tt) → tt
   sensor : Sensor b ↝ Sensor a
-  sensor = (λ (.tt) → tt) ⇵ λ _sh → f
+  sensor = (λ (.tt) → tt) ⇵ λ (.tt) → f
   enclose : (a ◄ b) ↝ Closed
   enclose = (λ _ → tt) ⇵ λ sh (.tt) → f sh
 open lenses public
@@ -127,6 +127,15 @@ module functors (f : Set → Set) where
       duplicate : lift a ↝ lift (lift a)
       duplicate = id ⇵ λ _ → μ
 
+module stream where
+  record Stream (a : Set) : Set where
+    constructor _∷_
+    coinductive
+    field
+      hd : a
+      tl : Stream a
+open stream using (Stream)
+  
 module list where
   Vect : ∀ {ℓ} → ℕ → Set ℓ → Set ℓ
   Vect n t = Fin n → t
@@ -201,12 +210,13 @@ module ops where
       s (a⁺ , x⁺) (inj₁ b⁻) = inj₁ (set a↝b a⁺ b⁻)
       s (a⁺ , x⁺) (inj₂ y⁻) = inj₂ (set x↝y x⁺ y⁻)
     
+-- TODO: remove Σ
     prod : Σ[ ind ∈ Set ] (ind → Arena) → Arena
     prod (ind , arena) = ((i : ind) → shape (arena i))
                        ◅ (λ sh → Σ[ i ∈ ind ] pos (arena i) (sh i))
 
     pair : ∀ {x a b} → x ↝ a → x ↝ b → x ↝ (a ⊗ b)
-    pair {x} {a} {b} x↝a x↝b = g ⇵ {!s!} where
+    pair {x} {a} {b} x↝a x↝b = g ⇵ s where
       open Arena a renaming (shape to A⁺; pos to A⁻)
       open Arena b renaming (shape to B⁺; pos to B⁻)
       open Arena x renaming (shape to X⁺; pos to X⁻)
@@ -237,6 +247,7 @@ module ops where
       g (a⁺ , x⁺) = (get a↝b a⁺) , (get x↝y x⁺)
       s : ((a⁺ , x⁺) : A⁺ × X⁺) → B⁻ (get a↝b a⁺) × Y⁻ (get x↝y x⁺) → A⁻ a⁺ × X⁻ x⁺
       s (a⁺ , x⁺) (b⁻ , y⁻) = set a↝b a⁺ b⁻ , set x↝y x⁺ y⁻
+  open juxtaposition public
 
   module compose where
     _⊚_ : Arena → Arena → Arena
@@ -268,6 +279,124 @@ module ops where
     _  ⟦ᵒ⟧ Nat.zero    = idLens Closed 
     lens ⟦ᵒ⟧ Nat.suc n = lens ⟦⊚⟧ (lens ⟦ᵒ⟧ n)
 
-    EmitterPow : (a : Set) (n : ℕ) → (Emitter a ᵒ n) ↝ Emitter (Vect n a)
-    EmitterPow a Nat.zero = (λ _ ()) ⇵ (λ sh _ → tt)
-    EmitterPow a (Nat.suc n) = {!!} ⇵ {!!}
+  --  EmitterPow : (a : Set) (n : ℕ) → (Emitter a ᵒ n) ↝ Emitter (Vect n a)
+ --   EmitterPow a Nat.zero = (λ _ ()) ⇵ (λ sh _ → tt)
+--    EmitterPow a (Nat.suc n) = {!!}
+  open compose public
+open ops public
+
+module comonoid where
+  record Comonoid : Set₁ where
+    field
+      domains : Arena
+      ε : domains ↝ Closed
+      δ : domains ↝ (domains ⊚ domains)
+
+  module comonoids where
+    open Comonoid
+    MonSensor : (t : Set) → t → (t → t → t) → Comonoid
+    domains (MonSensor t ε _∙_) = ⊤ ◄ t
+    ε (MonSensor t ε _∙_) = sensor \ _ → ε
+    δ (MonSensor t ε _∙_) = (λ (.tt) → (tt , λ _ → tt)) ⇵ λ (.tt) (x , y) → x ∙ y 
+
+    ContrGrpd : Set → Comonoid
+    domains (ContrGrpd s) = s ◄ s
+    ε (ContrGrpd _) = (λ _ → tt) ⇵ (λ sh _ → sh)
+    δ (ContrGrpd _) = (λ x → x , id) ⇵ λ sh (_ , b) → b
+
+    TrajComon : Comonoid
+    TrajComon = MonSensor ℕ Nat.zero Nat._+_
+
+
+
+  module _ (s : Set) where
+    open Comonoid (comonoids.ContrGrpd s)
+    _^δ_ : (n : ℕ) → (s ◄ s) ↝ ((s ◄ s) ᵒ n)
+    _^δ_ Nat.zero  = ε
+    _^δ_ (Nat.suc n) = δ ▸ (idLens (s ◄ s) ⟦⊚⟧ (_^δ_ n))
+
+    module _ {a b x y : Arena} where
+        duoidal : ((a ⊚ b) & (x ⊚ y)) ↝ ((a & x) ⊚ (b & y))
+        get duoidal ((a⁺ , bs) , x⁺ , ys) = (a⁺ , x⁺) , λ (a⁻ , y⁻) → bs a⁻ , ys y⁻
+        set duoidal ((a⁺ , bs) , x⁺ , ys) ((a⁻ , x⁻) , b⁻ , y⁻) = (a⁻ , b⁻) , (x⁻ , y⁻)
+open comonoid
+
+module exp where
+  _^_ : Arena → Arena → Arena
+  a ^ b = product.prod (A⁺ , λ a⁺ → b ⊚ Exception (A⁻ a⁺)) where
+    open Arena a renaming (shape to A⁺; pos to A⁻)
+    open Arena b renaming (shape to B⁺; pos to B⁻)
+
+module internal-hom where
+
+  _⊸_ : Arena → Arena → Arena
+  a ⊸ b = product.prod (A⁺ , λ a⁺ → b ⊚ (A⁻ a⁺ ◄ ⊤)) where
+    open Arena a renaming (shape to A⁺; pos to A⁻)
+    open Arena b renaming (shape to B⁺; pos to B⁻)
+  eval : ∀ {a b} → (a & (a ⊸ b)) ↝ b
+  eval {a} {b} = g ⇵ s where
+    open Arena a renaming (shape to A⁺; pos to A⁻)
+    open Arena b renaming (shape to B⁺; pos to B⁻)
+    g : (A⁺ × ((a⁺ : A⁺) → Σ[ b⁺ ∈ B⁺ ] ((b⁻ : B⁻ b⁺) → A⁻ a⁺))) → B⁺
+    g (a⁺ , bs) = proj₁ (bs a⁺)
+    s : (sh@(a⁺ , bs) : (A⁺ × ((a+ : A⁺) → Σ[ b⁺ ∈ B⁺ ] (B⁻ b⁺ → A⁻ a+))))
+      → B⁻ (fst (bs a⁺))
+      → Σ[ a⁻ ∈ A⁻ a⁺ ] Σ[ a+ ∈ A⁺ ] Σ[ b⁻ ∈ B⁻ (proj₁ (bs a+)) ] ⊤ 
+    s (a⁺ , bs) b⁻ = snd (bs a⁺) b⁻ , a⁺ , b⁻ , tt
+    -- prod (ind , arena) = ((i : ind) → shape (arena i)) ◅ (λ sh → Σ[ i ∈ ind ] pos (arena i) (sh i))
+
+module dynamical where
+    record DynSystem : Set₁ where
+      field
+        state : Set
+        body : Arena
+        pheno : (state ◄ state) ↝ body
+    open DynSystem public
+    static : DynSystem
+    state static = ⊤
+    body static = ⊤ ◄ ⊤
+    pheno static = emitter id
+
+    module _ (dyn1 dyn2 : DynSystem) where
+        _&&&_ : DynSystem
+        state _&&&_ = state dyn1 × state dyn2
+        body _&&&_ = body dyn1 & body dyn2
+        get (pheno _&&&_) (s , t) = get (pheno dyn1) s , get (pheno dyn2) t
+        set (pheno _&&&_) (s , t) (p , q) = set (pheno dyn1) s p , set (pheno dyn2) t q
+    {-# TERMINATING #-}
+    juxtapose : List DynSystem → DynSystem
+    juxtapose (Nat.zero , _) = static
+    juxtapose ds@(Nat.suc n , _) = head ds (λ ()) &&& juxtapose (tail ds λ ())
+
+    install : (d : DynSystem) (a : Arena) → (body d ↝ a) → DynSystem
+    install d a l = record {state = state d; body = a; pheno = pheno d ▸ l}
+
+    speedup : DynSystem → ℕ → DynSystem
+    state (speedup dyn n) = state dyn
+    body (speedup dyn n) = body dyn ᵒ n
+    pheno (speedup dyn n) = (state dyn ^δ n) ▸ (pheno dyn ⟦ᵒ⟧ n)
+
+    module Dyn (d : DynSystem) (e : body d ↝ (⊤ ◄ ⊤)) where
+        open Stream
+        run : state d → Stream (shape $ body d)
+        hd (run s) = pheno d .get s
+        tl (run s) = run (pheno d .set s (e .set (hd (run s)) tt))
+open dynamical
+
+record Behavior (a : Arena) : Set where
+    coinductive
+    constructor _∷_
+    field
+      hd : shape a
+      tl : pos a hd → Behavior a
+module behavior where
+    module _ {a : Arena} (phys : a ↝ (⊤ ◄ ⊤)) where
+      toStream : Behavior a → Stream (shape a)
+      Stream.hd (toStream b) = Behavior.hd b
+      Stream.tl (toStream b) = toStream (Behavior.tl b (set phys (Stream.hd (toStream b)) tt))
+    module _ (d : DynSystem) where
+      dynBehavior : state d → Behavior (body d)
+      Behavior.hd (dynBehavior s) = get (pheno d) s
+      Behavior.tl (dynBehavior s) d' = dynBehavior (set (pheno d) s d')
+      run : (body d ↝ Closed) → state d → Stream (shape $ body d)
+      run phys s = toStream phys (dynBehavior s)
