@@ -27,22 +27,28 @@ open arena public
 
 
 module lens where
-    infixr 8 _↝_
-    record _↝_ (a b : Arena) : Set where
-      constructor _⇵_
+    module _ (a b : Arena) where
       open Arena a renaming (ς to A⁺; ρ to A⁻)
       open Arena b renaming (ς to B⁺; ρ to B⁻)
-      field
-        get : A⁺ → B⁺
-        set : (a⁺ : A⁺) → B⁻ (get a⁺) → A⁻ a⁺
-    open _↝_ public
+      infixr 8 _↝_
+      _↝_ : Set
+      _↝_ = (a⁺ : A⁺) → Σ[ b⁺ ∈ B⁺ ] (B⁻ b⁺ → A⁻ a⁺)
     module _ {a b : Arena} where
+        open Arena a renaming (ς to A⁺; ρ to A⁻)
+        open Arena b renaming (ς to B⁺; ρ to B⁻)
         infixl 5 _★_
+        get : (a ↝ b) → ς a → ς b
+        get l = fst ∘ l
         _★_ : ς a → (a ↝ b) → ς b
         ςa ★ l = get l ςa
+        set :  (a↝b : a ↝ b) → (ςa : ς a) → ρ b (ςa ★ a↝b) → ρ a ςa
+        set l = snd ∘ l
         infixl 4 _#_←_
-        _#_←_ : (ςa : ς a) → (a↝b : a ↝ b) → ρ b (get a↝b ςa) → ρ a ςa
-        ςa # l ← ρb  = set l ςa ρb
+        _#_←_ : (ςa : ς a) → (a↝b : a ↝ b) → ρ b (ςa ★ a↝b) → ρ a ςa
+        ςa # l ← ρb  = snd (l ςa) ρb
+        _⇵_ : (get : A⁺ → B⁺) → (set : (a⁺ : A⁺) → B⁻ (get a⁺) → A⁻ a⁺) → a ↝ b
+        g ⇵ s = λ a⁺ → (g a⁺) , (s a⁺)
+        
     idLens : (a : Arena) → a ↝ a
     idLens a =  id ⇵ λ _ → id
     _▸_ : ∀ {a b c} → (a ↝ b) → (b ↝ c) → (a ↝ c)
@@ -52,15 +58,14 @@ module lens where
     module _ {a c : Arena} (l : a ↝ c) where
       open Arena a renaming (ς to A⁺; ρ to A⁻)
       open Arena c renaming (ς to C⁺; ρ to C⁻)
-      open _↝_ l renaming (get to f; set to f†)
       Factor : Σ[ b ∈ Arena ] (a ↝ b) × (b ↝ c)
       Factor = b , (vertf , cartf) where
         b : Arena
-        ς b = A⁺; ρ b = C⁻ ∘ f
+        ς b = A⁺; ρ b = C⁻ ∘ get l
         vertf : a ↝ b
-        get vertf = id; set vertf = f†
+        vertf = id ⇵ set l
         cartf : b ↝ c
-        get cartf = f; set cartf _shₐ x = x
+        cartf = get l ⇵ λ _ → id
 open lens
 
 module arenas where
@@ -83,10 +88,10 @@ module arenas where
       ev0 ev1 ev1y : Arena
       ev0 = Exception $ a ⦅ ⊥ ⦆
       fromEv0 : ev0 ↝ a
-      fromEv0 = record { get = fst ; set = snd }
+      fromEv0 = fst ⇵ snd
       ev1 = Exception A⁺ -- (a ⦅ ⊤ ⦆)
       toEv1 : a ↝ ev1
-      toEv1 = record { get = id ; set = λ _shₐ → ⊥-elim }
+      toEv1 = id ⇵ λ _ → ⊥-elim
 
       ev1y = Emitter A⁺
       fromEv1y : ev1y ↝ a
@@ -123,7 +128,7 @@ module functors (f : Set → Set) where
       lift a = A⁺ ◅ (f ∘ A⁻) where
           open Arena a renaming (ς to A⁺; ρ to A⁻)
       liftLens : ∀ {a b} → a ↝ b → lift a ↝ lift b
-      liftLens l = l .get ⇵ (φ ∘ l .set)
+      liftLens l = get l ⇵ (φ ∘ set l)
 
 
     module lift_comonad {a : Arena} ⦃ f_monad : Monad ⦄ where
@@ -325,8 +330,8 @@ module comonoid where
 
     module _ {a b x y : Arena} where
         duoidal : ((a ⊗ b) ⅋ (x ⊗ y)) ↝ ((a ⅋ x) ⊗ (b ⅋ y))
-        get duoidal ((a⁺ , bs) , x⁺ , ys) = (a⁺ , x⁺) , λ (a⁻ , y⁻) → bs a⁻ , ys y⁻
-        set duoidal ((a⁺ , bs) , x⁺ , ys) ((a⁻ , x⁻) , b⁻ , y⁻) = (a⁻ , b⁻) , (x⁻ , y⁻)
+        duoidal ((a⁺ , bs) , x⁺ , ys) = ((a⁺ , x⁺) , (λ (a⁻ , y⁻) → bs a⁻ , ys y⁻))
+                                      , λ ((a⁻ , x⁻) , b⁻ , y⁻) → (a⁻ , b⁻) , (x⁻ , y⁻)
 open comonoid
 
 module exp where
@@ -335,12 +340,16 @@ module exp where
     open Arena a renaming (ς to A⁺; ρ to A⁻)
     open Arena b renaming (ς to B⁺; ρ to B⁻)
 
+    -- prod arena = λ ia⁺ → Σ[ a⁺ ∈ A⁺ ] × (B⁻ b⁺)
+    --a ⊗ b = (Σ[ a⁺ ∈ A⁺ ](A⁻ a⁺ → B⁺)) ◅ λ (_ , bs) → ∃ (B⁻ ∘ bs) where
+
 module internal-hom where
   _⊸_ : Arena → Arena → Arena
   a ⊸ b = product.prod (A⁺ , λ a⁺ → b ⊗ (A⁻ a⁺ ◄ ⊤)) where
-    --  ≡ ((a⁺ : A⁺) → Σ[ b⁺ ∈ B⁺ ](B⁻ b⁺ → A⁻ a⁺) ◅ (λ bs → Σ[ a⁺ ∈ A⁺ ](Σ[ b⁻ ∈ B⁻ ] ⊤)
-    --  ≅ ((a⁺ : A⁺) → Σ[ b⁺ ∈ B⁺ ](B⁻ b⁺ → A⁻ a⁺)) ◄ (A⁺ × B⁻)
-    --  ≅ (a ↝ b) ◄ (A⁺ × B⁻)
+--  a ⊸ b = ((a⁺ : A⁺) → Σ[ b⁺ ∈ B⁺ ](B⁻ b⁺ → A⁻ a⁺))
+--        ◅ λ bs → Σ[ a⁺ ∈ A⁺ ](Σ (B⁻ (fst (bs a⁺)))(λ _ → ⊤))
+    --  ≡ (a ↝ b) ◅ λ bs → Σ[ a⁺ ∈ A⁺ ](Σ (B⁻ (fst (bs a⁺)))(λ _ → ⊤))
+    --  ≅ (a ↝ b) ◅ λ bs → (Σ A⁺ $ B⁻ ∘ fst ∘ bs)
     open Arena a renaming (ς to A⁺; ρ to A⁻)
     open Arena b renaming (ς to B⁺; ρ to B⁻)
   eval : ∀ {a b} → (a ⅋ (a ⊸ b)) ↝ b
@@ -371,8 +380,8 @@ module dynamical where
         _XXX_ : DynSystem
         state _XXX_ = state dyn1 × state dyn2
         body _XXX_  = body  dyn1 ⅋ body  dyn2
-        get (pheno _XXX_) (s , t)         = (s ★ pheno dyn1)     , (t ★ pheno dyn2)
-        set (pheno _XXX_) (s , t) (p , q) = (s # pheno dyn1 ← p) , (t # pheno dyn2 ← q)
+        pheno _XXX_ (s , t)             = ((s ★ pheno dyn1)     , (t ★ pheno dyn2))
+                            , λ (p , q) →  (s # pheno dyn1 ← p) , (t # pheno dyn2 ← q)
     {-# TERMINATING #-}
     juxtapose : List DynSystem → DynSystem
     juxtapose (Nat.zero , _) = static
